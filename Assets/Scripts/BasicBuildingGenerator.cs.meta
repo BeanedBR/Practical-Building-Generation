@@ -1,0 +1,13 @@
+fileFormatVersion: 2
+guid: a1acc5e8169cf4f4283d2ffab1c70d3a
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - wallSegmentPrefab: {fileID: 3524104258624738386, guid: 812b681fe2e96de44871b28979dc57de, type: 3}
+  - windowSegmentPrefab: {fileID: 3485104547798280320, guid: f6ed57f29b11ed34fbbf488d72e68a12, type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
