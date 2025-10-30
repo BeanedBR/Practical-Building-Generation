@@ -3,11 +3,11 @@ Software that generates buildings, including it's interior based on a customisab
 
 # Meeting Logs
 
-> Meeting 1 - 08/10/2025
+> Meeting 1 - 08/10/2025 14:00
 - Create a problem statement including project objectives
 - Look into the literature review, ready for writing
 - Create a simple demo  before 03/11/2025
 
-> Meeting 2 - 22/10/2025T
+> Meeting 2 - 22/10/2025 14:00
 - Create a gant chant / think about a time plan
 - Talk about the demo in the literature review to ensure risk minimisation has happened
