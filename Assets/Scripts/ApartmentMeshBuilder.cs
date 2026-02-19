@@ -8,6 +8,14 @@ public class ApartmentMeshBuilder
     private MeshFilter meshFilter;
     private Transform transform;
 
+    // Submesh indices constants
+    private const int ID_EXT = 0;
+    private const int ID_LIV = 1;
+    private const int ID_KIT = 2;
+    private const int ID_BAT = 3;
+    private const int ID_BED = 4;
+    private const int ID_ENT = 5;
+
     public ApartmentMeshBuilder(ProceduralApartment config, MeshFilter mf, Transform t)
     {
         this.config = config;
@@ -17,25 +25,24 @@ public class ApartmentMeshBuilder
 
     public void BuildMesh(List<RectXZ> rooms, float xMin, float xMax, float zMin, float zMax, float doorX, Mesh _mesh)
     {
-        if (_mesh == null) _mesh = new Mesh { name = "ProceduralApartmentMesh" };
-        else _mesh.Clear();
-
         float hx = config.width * 0.5f;
         float hz = config.length * 0.5f;
 
-        // Inner corners (CCW)
+        // Corners
         Vector3 c0 = new Vector3(-hx, 0f, -hz);
         Vector3 c1 = new Vector3(hx, 0f, -hz);
         Vector3 c2 = new Vector3(hx, 0f, hz);
         Vector3 c3 = new Vector3(-hx, 0f, hz);
-
         Vector3 center = (c0 + c1 + c2 + c3) * 0.25f;
 
-        var verts = new List<Vector3>(4096);
-        var tris = new List<int>(8192);
-        var uvs = new List<Vector2>(4096);
+        var verts = new List<Vector3>(8192);
+        var uvs = new List<Vector2>(8192);
 
-        // --- Outer wall normals and corners ---
+        // We have 6 submeshes
+        var subTris = new List<List<int>>(6);
+        for (int i = 0; i < 6; i++) subTris.Add(new List<int>(4096));
+
+        // --- Outer Wall Construction ---
         Vector3 n0 = EdgeOutwardNormal(c0, c1, center);
         Vector3 n1 = EdgeOutwardNormal(c1, c2, center);
         Vector3 n2 = EdgeOutwardNormal(c2, c3, center);
@@ -46,25 +53,45 @@ public class ApartmentMeshBuilder
         Vector3 o2 = OffsetCorner(c2, n1, n2, config.outerWallThickness);
         Vector3 o3 = OffsetCorner(c3, n2, n3, config.outerWallThickness);
 
-        // --- Outer walls ---
-        AddThickWallSegment(verts, tris, uvs, c0, c1, o0, o1, config.height, center);
-        AddThickWallSegment(verts, tris, uvs, c1, c2, o1, o2, config.height, center);
+        // 1. Draw Exterior Skin (All faces pointing out) + Tops
+        AddOuterSkin(verts, uvs, subTris, c0, c1, o0, o1, config.height, center);
+        AddOuterSkin(verts, uvs, subTris, c1, c2, o1, o2, config.height, center);
 
-        // Forward wall (+Z) : c2 -> c3
+        // Front wall (c2->c3) needs door hole
         if (config.cutFrontDoor)
-            AddThickWallSegmentWithDoor(verts, tris, uvs, c2, c3, o2, o3, config.height, center, config.doorWidth, config.doorHeight, config.doorOffset);
+            AddOuterSkinWithDoor(verts, uvs, subTris, c2, c3, o2, o3, config.height, center, config.doorWidth, config.doorHeight, config.doorOffset);
         else
-            AddThickWallSegment(verts, tris, uvs, c2, c3, o2, o3, config.height, center);
+            AddOuterSkin(verts, uvs, subTris, c2, c3, o2, o3, config.height, center);
 
-        AddThickWallSegment(verts, tris, uvs, c3, c0, o3, o0, config.height, center);
+        AddOuterSkin(verts, uvs, subTris, c3, c0, o3, o0, config.height, center);
 
-        // --- Build floors + interior walls using grid ---
+
+        // 2. Draw Interior Faces of Outer Walls (Segmented by room)
+        // Wall 0: c0 -> c1 (Back)
+        AddSegmentedInnerFace(verts, uvs, subTris, rooms, c0, c1, config.height, center);
+        // Wall 1: c1 -> c2 (Right)
+        AddSegmentedInnerFace(verts, uvs, subTris, rooms, c1, c2, config.height, center);
+        // Wall 2: c2 -> c3 (Front)
+        if (config.cutFrontDoor)
+            AddSegmentedInnerFaceWithDoor(verts, uvs, subTris, rooms, c2, c3, config.height, center, config.doorWidth, config.doorHeight, config.doorOffset);
+        else
+            AddSegmentedInnerFace(verts, uvs, subTris, rooms, c2, c3, config.height, center);
+        // Wall 3: c3 -> c0 (Left)
+        AddSegmentedInnerFace(verts, uvs, subTris, rooms, c3, c0, config.height, center);
+
+
+        // --- Interior Grid (Floors + Partitions) ---
         if (config.generateRoomFloors || config.generateInteriorWalls)
-            BuildInteriorFromGrid(verts, tris, uvs, rooms, xMin, xMax, zMin, zMax, config.height);
+            BuildInteriorFromGrid(verts, subTris, uvs, rooms, xMin, xMax, zMin, zMax, config.height);
 
-        // Apply main mesh
+        // Final Mesh Assembly
+        _mesh.Clear();
         _mesh.SetVertices(verts);
-        _mesh.SetTriangles(tris, 0);
+        _mesh.subMeshCount = 6;
+        for (int i = 0; i < 6; i++)
+        {
+            _mesh.SetTriangles(subTris[i], i);
+        }
         _mesh.SetUVs(0, uvs);
         _mesh.RecalculateNormals();
         _mesh.RecalculateBounds();
@@ -72,23 +99,16 @@ public class ApartmentMeshBuilder
         meshFilter.sharedMesh = _mesh;
     }
 
-    void BuildInteriorFromGrid(List<Vector3> shellVerts, List<int> shellTris, List<Vector2> shellUvs,
+    // --- Grid Logic ---
+    void BuildInteriorFromGrid(List<Vector3> verts, List<List<int>> subTris, List<Vector2> uvs,
                                List<RectXZ> rooms, float xMin, float xMax, float zMin, float zMax, float wallHeight)
     {
         var xs = new List<float> { xMin, xMax };
         var zs = new List<float> { zMin, zMax };
+        foreach (var r in rooms) { xs.Add(r.x0); xs.Add(r.x1); zs.Add(r.z0); zs.Add(r.z1); }
+        UniqueSort(xs); UniqueSort(zs);
 
-        foreach (var r in rooms)
-        {
-            xs.Add(r.x0); xs.Add(r.x1);
-            zs.Add(r.z0); zs.Add(r.z1);
-        }
-
-        UniqueSort(xs);
-        UniqueSort(zs);
-
-        int nx = xs.Count - 1;
-        int nz = zs.Count - 1;
+        int nx = xs.Count - 1; int nz = zs.Count - 1;
         string[,] cell = new string[nx, nz];
 
         for (int i = 0; i < nx; i++)
@@ -101,447 +121,348 @@ public class ApartmentMeshBuilder
             }
         }
 
-        // Floors
-        if (config.generateRoomFloors)
-        {
-            var floorBuilders = new Dictionary<string, FloorBuild>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < nx; i++)
-            {
-                float x0 = xs[i], x1 = xs[i + 1];
-                for (int j = 0; j < nz; j++)
-                {
-                    float z0 = zs[j], z1 = zs[j + 1];
-                    string label = cell[i, j];
+        // Floors (Separate objects, not main mesh)
+        if (config.generateRoomFloors) GenerateFloorObjects(cell, xs, zs);
+        else ClearFloorObjects();
 
-                    if (!floorBuilders.TryGetValue(label, out var fb))
-                    {
-                        fb = new FloorBuild();
-                        floorBuilders[label] = fb;
-                    }
-
-                    Vector3 v0 = new Vector3(x0, 0f, z0);
-                    Vector3 v1 = new Vector3(x1, 0f, z0);
-                    Vector3 v2 = new Vector3(x1, 0f, z1);
-                    Vector3 v3 = new Vector3(x0, 0f, z1);
-
-                    AddQuad(fb.verts, fb.tris, fb.uvs, v0, v1, v2, v3, Vector3.up);
-                    if (config.doubleSidedFloors)
-                        AddQuad(fb.verts, fb.tris, fb.uvs, v0, v1, v2, v3, Vector3.down);
-                }
-            }
-            RebuildFloorObjects(floorBuilders);
-        }
-        else
-        {
-            ClearFloorObjects();
-        }
-
+        // Interior Walls
         if (!config.generateInteriorWalls) return;
 
         float t = Mathf.Max(0.01f, config.interiorWallThickness);
         HashSet<string> roomsWithDoors = new HashSet<string>();
 
-        // 1. Vertical boundaries
+        // 1. Vertical Boundaries (FIX APPLIED HERE)
         for (int i = 1; i < nx; i++)
         {
             int j = 0;
             while (j < nz)
             {
-                string a = cell[i - 1, j];
-                string b = cell[i, j];
+                string a = cell[i - 1, j]; // Left Room
+                string b = cell[i, j];     // Right Room
+                if (!ShouldWallBetween(a, b)) { j++; continue; }
 
-                bool need = ShouldWallBetween(a, b);
-                if (!need) { j++; continue; }
-
-                int start = j;
                 int end = j;
                 while (end + 1 < nz)
                 {
-                    string a2 = cell[i - 1, end + 1];
-                    string b2 = cell[i, end + 1];
-                    if (!ShouldWallBetween(a2, b2)) break;
-                    if (!SamePair(a, b, a2, b2)) break;
+                    if (!ShouldWallBetween(cell[i - 1, end + 1], cell[i, end + 1])) break;
+                    if (!SamePair(a, b, cell[i - 1, end + 1], cell[i, end + 1])) break;
                     end++;
                 }
 
-                float x = xs[i];
-                float z0 = zs[start];
-                float z1 = zs[end + 1];
-                Vector3 pStart = new Vector3(x, 0f, z0);
-                Vector3 pEnd = new Vector3(x, 0f, z1);
-                float wallLen = Vector3.Distance(pStart, pEnd);
+                Vector3 pStart = new Vector3(xs[i], 0f, zs[j]);
+                Vector3 pEnd = new Vector3(xs[i], 0f, zs[end + 1]);
 
-                string enclosedRoom = GetEnclosedRoom(a, b);
-                bool canFitDoor = wallLen > config.doorWidth + 0.2f;
+                int matA = GetRoomMatIndex(a); // Material for Room A
+                int matB = GetRoomMatIndex(b); // Material for Room B
 
-                if (enclosedRoom != null && !roomsWithDoors.Contains(enclosedRoom) && canFitDoor)
-                {
-                    AddInteriorWallWithDoor(shellVerts, shellTris, shellUvs, pStart, pEnd, wallHeight, t, config.doorWidth, config.doorHeight);
-                    roomsWithDoors.Add(enclosedRoom);
-                }
-                else
-                {
-                    AddInteriorWall(shellVerts, shellTris, shellUvs, pStart, pEnd, 0f, wallHeight, t);
-                }
+                // FIX: Swap materials for vertical walls. 
+                // Reason: Side A of a vertical wall faces East (Right), so it should use matB.
+                //         Side B of a vertical wall faces West (Left), so it should use matA.
+                ProcessWallSegment(verts, subTris, uvs, pStart, pEnd, wallHeight, t, matB, matA, a, b, roomsWithDoors);
+
                 j = end + 1;
             }
         }
 
-        // 2. Horizontal boundaries
+        // 2. Horizontal Boundaries (No change needed)
         for (int j = 1; j < nz; j++)
         {
             int i = 0;
             while (i < nx)
             {
-                string a = cell[i, j - 1];
-                string b = cell[i, j];
+                string a = cell[i, j - 1]; // Back Room
+                string b = cell[i, j];     // Front Room
+                if (!ShouldWallBetween(a, b)) { i++; continue; }
 
-                bool need = ShouldWallBetween(a, b);
-                if (!need) { i++; continue; }
-
-                int start = i;
                 int end = i;
                 while (end + 1 < nx)
                 {
-                    string a2 = cell[end + 1, j - 1];
-                    string b2 = cell[end + 1, j];
-                    if (!ShouldWallBetween(a2, b2)) break;
-                    if (!SamePair(a, b, a2, b2)) break;
+                    if (!ShouldWallBetween(cell[end + 1, j - 1], cell[end + 1, j])) break;
+                    if (!SamePair(a, b, cell[end + 1, j - 1], cell[end + 1, j])) break;
                     end++;
                 }
 
-                float z = zs[j];
-                float x0 = xs[start];
-                float x1 = xs[end + 1];
-                Vector3 pStart = new Vector3(x0, 0f, z);
-                Vector3 pEnd = new Vector3(x1, 0f, z);
-                float wallLen = Vector3.Distance(pStart, pEnd);
+                Vector3 pStart = new Vector3(xs[i], 0f, zs[j]);
+                Vector3 pEnd = new Vector3(xs[end + 1], 0f, zs[j]);
 
-                string enclosedRoom = GetEnclosedRoom(a, b);
-                bool canFitDoor = wallLen > config.doorWidth + 0.2f;
+                int matA = GetRoomMatIndex(a);
+                int matB = GetRoomMatIndex(b);
 
-                if (enclosedRoom != null && !roomsWithDoors.Contains(enclosedRoom) && canFitDoor)
-                {
-                    AddInteriorWallWithDoor(shellVerts, shellTris, shellUvs, pStart, pEnd, wallHeight, t, config.doorWidth, config.doorHeight);
-                    roomsWithDoors.Add(enclosedRoom);
-                }
-                else
-                {
-                    AddInteriorWall(shellVerts, shellTris, shellUvs, pStart, pEnd, 0f, wallHeight, t);
-                }
+                // Horizontal walls work correctly with A->A, B->B because Side A faces Back (Room A).
+                ProcessWallSegment(verts, subTris, uvs, pStart, pEnd, wallHeight, t, matA, matB, a, b, roomsWithDoors);
                 i = end + 1;
             }
         }
     }
 
-    // --- Helpers used by Grid & Mesh ---
-
-    bool SamePair(string a, string b, string c, string d)
+    void ProcessWallSegment(List<Vector3> verts, List<List<int>> subTris, List<Vector2> uvs,
+        Vector3 pStart, Vector3 pEnd, float h, float t, int matSideA, int matSideB, string roomA, string roomB, HashSet<string> roomsWithDoors)
     {
-        return (a == c && b == d) || (a == d && b == c);
-    }
+        float len = Vector3.Distance(pStart, pEnd);
+        string enclosed = GetEnclosedRoom(roomA, roomB);
+        bool canFit = len > config.doorWidth + 0.2f;
 
-    bool ShouldWallBetween(string a, string b)
-    {
-        if (a == b) return false;
-        if (config.entryOpenToLiving)
+        if (enclosed != null && !roomsWithDoors.Contains(enclosed) && canFit)
         {
-            if ((a == "Entry" && b == "Living") || (a == "Living" && b == "Entry"))
-                return false;
-        }
-        return true;
-    }
-
-    string LabelAt(List<RectXZ> rooms, float x, float z)
-    {
-        for (int i = 0; i < rooms.Count; i++)
-        {
-            if (rooms[i].Contains(x, z)) return rooms[i].label;
-        }
-        return "Living";
-    }
-
-    void UniqueSort(List<float> vals)
-    {
-        vals.Sort();
-        const float eps = 1e-4f;
-        int w = 0;
-        for (int r = 0; r < vals.Count; r++)
-        {
-            if (w == 0 || Mathf.Abs(vals[r] - vals[w - 1]) > eps)
-                vals[w++] = vals[r];
-        }
-        if (w < vals.Count) vals.RemoveRange(w, vals.Count - w);
-    }
-
-    string GetEnclosedRoom(string a, string b)
-    {
-        bool aIsOpen = (a == "Living" || a == "Entry");
-        bool bIsOpen = (b == "Living" || b == "Entry");
-        if (aIsOpen && !bIsOpen) return b;
-        if (!aIsOpen && bIsOpen) return a;
-        return null;
-    }
-
-    // --- Floor Object Management ---
-    void RebuildFloorObjects(Dictionary<string, FloorBuild> floors)
-    {
-        Transform root = GetOrCreateFloorsRoot();
-        var needed = new HashSet<string>(floors.Keys, StringComparer.OrdinalIgnoreCase);
-
-        foreach (var kv in floors)
-        {
-            string name = kv.Key;
-            var fb = kv.Value;
-
-            Transform child = root.Find(name);
-            if (child == null)
-            {
-                var go = new GameObject(name);
-                go.transform.SetParent(root, false);
-                child = go.transform;
-                go.AddComponent<MeshFilter>();
-                go.AddComponent<MeshRenderer>();
-            }
-
-            var mr = child.GetComponent<MeshRenderer>();
-            var parentMr = config.GetComponent<MeshRenderer>();
-            if (mr.sharedMaterial == null && parentMr != null)
-                mr.sharedMaterial = parentMr.sharedMaterial;
-
-            var mf = child.GetComponent<MeshFilter>();
-            Mesh m = mf.sharedMesh;
-            if (m == null)
-            {
-                m = new Mesh { name = $"Floor_{name}" };
-                mf.sharedMesh = m;
-            }
-            else m.Clear();
-
-            m.SetVertices(fb.verts);
-            m.SetTriangles(fb.tris, 0);
-            m.SetUVs(0, fb.uvs);
-            m.RecalculateNormals();
-            m.RecalculateBounds();
-            m.RecalculateTangents();
-        }
-
-        var toDelete = new List<GameObject>();
-        for (int i = 0; i < root.childCount; i++)
-        {
-            var ch = root.GetChild(i);
-            if (!needed.Contains(ch.name)) toDelete.Add(ch.gameObject);
-        }
-
-        foreach (var go in toDelete)
-        {
-            if (Application.isPlaying) UnityEngine.Object.Destroy(go);
-            else UnityEngine.Object.DestroyImmediate(go);
-        }
-    }
-
-    void ClearFloorObjects()
-    {
-        Transform root = transform.Find("Floors");
-        if (root == null) return;
-        if (Application.isPlaying) UnityEngine.Object.Destroy(root.gameObject);
-        else UnityEngine.Object.DestroyImmediate(root.gameObject);
-    }
-
-    Transform GetOrCreateFloorsRoot()
-    {
-        Transform root = transform.Find("Floors");
-        if (root != null) return root;
-        var go = new GameObject("Floors");
-        go.transform.SetParent(transform, false);
-        return go.transform;
-    }
-
-    // --- Wall Builders ---
-    void AddInteriorWallWithDoor(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
-                                 Vector3 a, Vector3 b, float wallHeight, float thickness, float dWidth, float dHeight)
-    {
-        Vector3 dir = (b - a);
-        float totalLen = dir.magnitude;
-        dir.Normalize();
-
-        if (totalLen < dWidth + 0.2f)
-        {
-            AddInteriorWall(verts, tris, uvs, a, b, 0f, wallHeight, thickness);
-            return;
-        }
-
-        float mid = totalLen * 0.5f;
-        float halfDoor = dWidth * 0.5f;
-        Vector3 pLeftJamb = a + dir * (mid - halfDoor);
-        Vector3 pRightJamb = a + dir * (mid + halfDoor);
-
-        AddInteriorWall(verts, tris, uvs, a, pLeftJamb, 0f, wallHeight, thickness);
-        AddInteriorWall(verts, tris, uvs, pRightJamb, b, 0f, wallHeight, thickness);
-
-        float headerStart = Mathf.Min(dHeight, wallHeight);
-        if (headerStart < wallHeight - 0.01f)
-        {
-            AddInteriorWall(verts, tris, uvs, pLeftJamb, pRightJamb, headerStart, wallHeight, thickness);
-        }
-    }
-
-    void AddInteriorWall(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
-                         Vector3 a, Vector3 b, float bottomY, float topY, float thickness)
-    {
-        Vector3 dir = (b - a);
-        dir.y = 0f;
-        float len = dir.magnitude;
-        if (len < 0.0001f) return;
-        dir /= len;
-
-        Vector3 perp = Vector3.Cross(Vector3.up, dir).normalized;
-        Vector3 half = perp * (thickness * 0.5f);
-
-        Vector3 aPos = a + half; Vector3 aNeg = a - half;
-        Vector3 bPos = b + half; Vector3 bNeg = b - half;
-
-        Vector3 upBottom = Vector3.up * bottomY;
-        Vector3 upTop = Vector3.up * topY;
-
-        AddQuad(verts, tris, uvs, aPos + upBottom, bPos + upBottom, bPos + upTop, aPos + upTop, perp);
-        AddQuad(verts, tris, uvs, bNeg + upBottom, aNeg + upBottom, aNeg + upTop, bNeg + upTop, -perp);
-        AddQuad(verts, tris, uvs, aNeg + upTop, bNeg + upTop, bPos + upTop, aPos + upTop, Vector3.up);
-        AddQuad(verts, tris, uvs, aNeg + upBottom, aPos + upBottom, aPos + upTop, aNeg + upTop, -dir);
-        AddQuad(verts, tris, uvs, bPos + upBottom, bNeg + upBottom, bNeg + upTop, bPos + upTop, dir);
-
-        if (bottomY > 0.01f)
-        {
-            AddQuad(verts, tris, uvs, aPos + upBottom, aNeg + upBottom, bNeg + upBottom, bPos + upBottom, Vector3.down);
-        }
-    }
-
-    // --- Thick Walls ---
-    void AddThickWallSegment(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
-                             Vector3 aInner, Vector3 bInner, Vector3 aOuter, Vector3 bOuter, float wallHeight, Vector3 roomCenter)
-    {
-        AddThickWallSegmentRange(verts, tris, uvs, aInner, bInner, aOuter, bOuter, 0f, wallHeight, roomCenter, true);
-    }
-
-    void AddThickWallSegmentRange(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
-                                  Vector3 aInner, Vector3 bInner, Vector3 aOuter, Vector3 bOuter,
-                                  float baseY, float topY, Vector3 roomCenter, bool addBottomFace)
-    {
-        Vector3 aInnerB = new Vector3(aInner.x, baseY, aInner.z);
-        Vector3 bInnerB = new Vector3(bInner.x, baseY, bInner.z);
-        Vector3 aOuterB = new Vector3(aOuter.x, baseY, aOuter.z);
-        Vector3 bOuterB = new Vector3(bOuter.x, baseY, bOuter.z);
-
-        Vector3 aInnerT = new Vector3(aInner.x, topY, aInner.z);
-        Vector3 bInnerT = new Vector3(bInner.x, topY, bInner.z);
-        Vector3 aOuterT = new Vector3(aOuter.x, topY, aOuter.z);
-        Vector3 bOuterT = new Vector3(bOuter.x, topY, bOuter.z);
-
-        Vector3 mid = (aInner + bInner) * 0.5f;
-        Vector3 inward = (roomCenter - mid); inward.y = 0f;
-        inward = inward.sqrMagnitude > 0f ? inward.normalized : Vector3.forward;
-        Vector3 outward = -inward;
-
-        AddQuad(verts, tris, uvs, aInnerB, bInnerB, bInnerT, aInnerT, inward);
-        AddQuad(verts, tris, uvs, bOuterB, aOuterB, aOuterT, bOuterT, outward);
-        AddQuad(verts, tris, uvs, aInnerT, bInnerT, bOuterT, aOuterT, Vector3.up);
-
-        if (addBottomFace)
-            AddQuad(verts, tris, uvs, aOuterB, bOuterB, bInnerB, aInnerB, Vector3.down);
-    }
-
-    void AddThickWallSegmentWithDoor(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
-                                     Vector3 aInner, Vector3 bInner, Vector3 aOuter, Vector3 bOuter,
-                                     float wallHeight, Vector3 roomCenter, float dWidth, float dHeight, float dOffset)
-    {
-        float doorTopY = Mathf.Clamp(dHeight, 0.01f, wallHeight - 0.001f);
-        Vector3 wallDir = (bInner - aInner); wallDir.y = 0f;
-        float segLen = wallDir.magnitude;
-        if (segLen < 0.0001f)
-        {
-            AddThickWallSegment(verts, tris, uvs, aInner, bInner, aOuter, bOuter, wallHeight, roomCenter);
-            return;
-        }
-        wallDir /= segLen;
-
-        float halfDoor = Mathf.Max(0.01f, dWidth * 0.5f);
-        float centerT = (segLen * 0.5f) + dOffset;
-        centerT = Mathf.Clamp(centerT, halfDoor, segLen - halfDoor);
-        float leftT = centerT - halfDoor;
-        float rightT = centerT + halfDoor;
-
-        Vector3 lInner = aInner + wallDir * leftT;
-        Vector3 rInner = aInner + wallDir * rightT;
-
-        Vector3 outward = EdgeOutwardNormal(aInner, bInner, roomCenter);
-        Vector3 lOuter = lInner + outward * config.outerWallThickness;
-        Vector3 rOuter = rInner + outward * config.outerWallThickness;
-
-        if (leftT > 0.0001f)
-            AddThickWallSegment(verts, tris, uvs, aInner, lInner, aOuter, lOuter, wallHeight, roomCenter);
-        if (rightT < segLen - 0.0001f)
-            AddThickWallSegment(verts, tris, uvs, rInner, bInner, rOuter, bOuter, wallHeight, roomCenter);
-
-        AddThickWallSegmentRange(verts, tris, uvs, lInner, rInner, lOuter, rOuter, doorTopY, wallHeight, roomCenter, true);
-
-        Vector3 lInnerTop = new Vector3(lInner.x, doorTopY, lInner.z);
-        Vector3 lOuterTop = new Vector3(lOuter.x, doorTopY, lOuter.z);
-        Vector3 lInnerB = new Vector3(lInner.x, 0f, lInner.z);
-        Vector3 lOuterB = new Vector3(lOuter.x, 0f, lOuter.z);
-
-        Vector3 rInnerTop = new Vector3(rInner.x, doorTopY, rInner.z);
-        Vector3 rOuterTop = new Vector3(rOuter.x, doorTopY, rOuter.z);
-        Vector3 rInnerB = new Vector3(rInner.x, 0f, rInner.z);
-        Vector3 rOuterB = new Vector3(rOuter.x, 0f, rOuter.z);
-
-        AddQuad(verts, tris, uvs, lInnerB, lOuterB, lOuterTop, lInnerTop, wallDir);
-        AddQuad(verts, tris, uvs, rOuterB, rInnerB, rInnerTop, rOuterTop, -wallDir);
-    }
-
-    // --- Math Geometry ---
-    Vector3 EdgeOutwardNormal(Vector3 a, Vector3 b, Vector3 center)
-    {
-        Vector3 dir = b - a; dir.y = 0f;
-        dir = dir.sqrMagnitude > 0f ? dir.normalized : Vector3.right;
-        Vector3 outward = Vector3.Cross(Vector3.up, dir).normalized;
-        Vector3 mid = (a + b) * 0.5f;
-        Vector3 toOutside = mid - center; toOutside.y = 0f;
-        if (Vector3.Dot(outward, toOutside) < 0f) outward = -outward;
-        return outward;
-    }
-
-    Vector3 OffsetCorner(Vector3 corner, Vector3 outwardPrev, Vector3 outwardNext, float thickness)
-    {
-        float d = Mathf.Clamp(Vector3.Dot(outwardPrev, outwardNext), -0.999f, 0.999f);
-        float scale = thickness / (1f + d);
-        return corner + (outwardPrev + outwardNext) * scale;
-    }
-
-    void AddQuad(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
-                 Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 desiredNormal)
-    {
-        int start = verts.Count;
-        verts.Add(v0); verts.Add(v1); verts.Add(v2); verts.Add(v3);
-
-        float uLen = (v1 - v0).magnitude;
-        float vLen = (v3 - v0).magnitude;
-        uvs.Add(new Vector2(0f, 0f));
-        uvs.Add(new Vector2(uLen, 0f));
-        uvs.Add(new Vector2(uLen, vLen));
-        uvs.Add(new Vector2(0f, vLen));
-
-        Vector3 n = Vector3.Cross(v1 - v0, v2 - v0);
-        bool flip = Vector3.Dot(n, desiredNormal) < 0f;
-
-        if (!flip)
-        {
-            tris.Add(start + 0); tris.Add(start + 1); tris.Add(start + 2);
-            tris.Add(start + 0); tris.Add(start + 2); tris.Add(start + 3);
+            AddInteriorWallWithDoor(verts, subTris, uvs, pStart, pEnd, h, t, config.doorWidth, config.doorHeight, matSideA, matSideB);
+            roomsWithDoors.Add(enclosed);
         }
         else
         {
-            tris.Add(start + 0); tris.Add(start + 2); tris.Add(start + 1);
-            tris.Add(start + 0); tris.Add(start + 3); tris.Add(start + 2);
+            AddInteriorWall(verts, subTris, uvs, pStart, pEnd, 0f, h, t, matSideA, matSideB);
         }
     }
+
+    // --- Outer Skins (Exterior Material Only) ---
+    void AddOuterSkin(List<Vector3> verts, List<Vector2> uvs, List<List<int>> subTris,
+                      Vector3 cInner1, Vector3 cInner2, Vector3 cOuter1, Vector3 cOuter2, float h, Vector3 center)
+    {
+        Vector3 mid = (cInner1 + cInner2) * 0.5f;
+        Vector3 inward = (center - mid); inward.y = 0f; inward.Normalize();
+        Vector3 outward = -inward;
+
+        Vector3 o1b = cOuter1; Vector3 o2b = cOuter2;
+        Vector3 o1t = cOuter1 + Vector3.up * h; Vector3 o2t = cOuter2 + Vector3.up * h;
+        Vector3 i1t = cInner1 + Vector3.up * h; Vector3 i2t = cInner2 + Vector3.up * h;
+
+        // Outer Face
+        AddQuad(verts, subTris[ID_EXT], uvs, o2b, o1b, o1t, o2t, outward);
+        // Top Face
+        AddQuad(verts, subTris[ID_EXT], uvs, i1t, i2t, o2t, o1t, Vector3.up);
+    }
+
+    void AddOuterSkinWithDoor(List<Vector3> verts, List<Vector2> uvs, List<List<int>> subTris,
+        Vector3 cInner1, Vector3 cInner2, Vector3 cOuter1, Vector3 cOuter2, float h, Vector3 center, float dw, float dh, float offset)
+    {
+        float dTop = Mathf.Clamp(dh, 0.01f, h - 0.001f);
+        Vector3 dir = (cInner2 - cInner1); float len = dir.magnitude; dir.Normalize();
+
+        float half = Mathf.Max(0.01f, dw * 0.5f);
+        float ct = (len * 0.5f) + offset;
+        float t1 = Mathf.Clamp(ct - half, 0f, len);
+        float t2 = Mathf.Clamp(ct + half, 0f, len);
+
+        Vector3 iL = cInner1 + dir * t1; Vector3 iR = cInner1 + dir * t2;
+        Vector3 outward = EdgeOutwardNormal(cInner1, cInner2, center);
+        Vector3 oL = iL + outward * config.outerWallThickness;
+        Vector3 oR = iR + outward * config.outerWallThickness;
+
+        // Left Chunk
+        if (t1 > 0.01f) AddOuterSkin(verts, uvs, subTris, cInner1, iL, cOuter1, oL, h, center);
+        // Right Chunk
+        if (t2 < len - 0.01f) AddOuterSkin(verts, uvs, subTris, iR, cInner2, oR, cOuter2, h, center);
+
+        // Header
+        Vector3 oLb = oL + Vector3.up * dTop; Vector3 oRb = oR + Vector3.up * dTop;
+        Vector3 oLt = oL + Vector3.up * h; Vector3 oRt = oR + Vector3.up * h;
+        Vector3 iLt = iL + Vector3.up * h; Vector3 iRt = iR + Vector3.up * h;
+        Vector3 iLb_h = iL + Vector3.up * dTop; Vector3 iRb_h = iR + Vector3.up * dTop;
+
+        // Header Outer
+        AddQuad(verts, subTris[ID_EXT], uvs, oRb, oLb, oLt, oRt, outward);
+        // Header Top
+        AddQuad(verts, subTris[ID_EXT], uvs, iLt, iRt, oRt, oLt, Vector3.up);
+        // Header Bottom
+        AddQuad(verts, subTris[ID_EXT], uvs, oLb, oRb, iRb_h, iLb_h, Vector3.down);
+
+        // Jambs
+        Vector3 jambL_o_b = oL; Vector3 jambL_o_t = oLb;
+        Vector3 jambL_i_b = iL; Vector3 jambL_i_t = iLb_h;
+        AddQuad(verts, subTris[ID_EXT], uvs, jambL_i_b, jambL_o_b, jambL_o_t, jambL_i_t, dir);
+
+        Vector3 jambR_o_b = oR; Vector3 jambR_o_t = oRb;
+        Vector3 jambR_i_b = iR; Vector3 jambR_i_t = iRb_h;
+        AddQuad(verts, subTris[ID_EXT], uvs, jambR_o_b, jambR_i_b, jambR_i_t, jambR_o_t, -dir);
+    }
+
+    // --- Inner Faces of Outer Walls (Material per room) ---
+    void AddSegmentedInnerFace(List<Vector3> verts, List<Vector2> uvs, List<List<int>> subTris,
+        List<RectXZ> rooms, Vector3 p1, Vector3 p2, float h, Vector3 center)
+    {
+        Vector3 dir = (p2 - p1); float len = dir.magnitude; dir.Normalize();
+        Vector3 inward = (center - (p1 + p2) * 0.5f); inward.y = 0; inward.Normalize();
+
+        float step = 0.5f;
+        for (float d = 0; d < len; d += step)
+        {
+            float dNext = Mathf.Min(d + step, len);
+            Vector3 s1 = p1 + dir * d;
+            Vector3 s2 = p1 + dir * dNext;
+
+            Vector3 checkPos = (s1 + s2) * 0.5f + inward * 0.1f;
+            string room = LabelAt(rooms, checkPos.x, checkPos.z);
+            int matId = GetRoomMatIndex(room);
+
+            AddQuad(verts, subTris[matId], uvs, s1, s2, s2 + Vector3.up * h, s1 + Vector3.up * h, inward);
+        }
+    }
+
+    void AddSegmentedInnerFaceWithDoor(List<Vector3> verts, List<Vector2> uvs, List<List<int>> subTris,
+       List<RectXZ> rooms, Vector3 p1, Vector3 p2, float h, Vector3 center, float dw, float dh, float offset)
+    {
+        Vector3 dir = (p2 - p1); float len = dir.magnitude; dir.Normalize();
+        Vector3 inward = (center - (p1 + p2) * 0.5f); inward.y = 0; inward.Normalize();
+
+        float mid = len * 0.5f + offset;
+        float holeStart = mid - dw * 0.5f;
+        float holeEnd = mid + dw * 0.5f;
+        float topH = Mathf.Clamp(dh, 0f, h);
+
+        float step = 0.25f;
+        for (float d = 0; d < len; d += step)
+        {
+            float dNext = Mathf.Min(d + step, len);
+            float segMid = (d + dNext) * 0.5f;
+            bool inHole = (segMid > holeStart && segMid < holeEnd);
+
+            Vector3 s1 = p1 + dir * d;
+            Vector3 s2 = p1 + dir * dNext;
+            Vector3 checkPos = (s1 + s2) * 0.5f + inward * 0.1f;
+            string room = LabelAt(rooms, checkPos.x, checkPos.z);
+            int matId = GetRoomMatIndex(room);
+
+            if (inHole)
+            {
+                if (topH < h) AddQuad(verts, subTris[matId], uvs, s1 + Vector3.up * topH, s2 + Vector3.up * topH, s2 + Vector3.up * h, s1 + Vector3.up * h, inward);
+            }
+            else
+            {
+                AddQuad(verts, subTris[matId], uvs, s1, s2, s2 + Vector3.up * h, s1 + Vector3.up * h, inward);
+            }
+        }
+    }
+
+    // --- Interior Partition Walls (Double Sided) ---
+    void AddInteriorWall(List<Vector3> verts, List<List<int>> subTris, List<Vector2> uvs,
+                         Vector3 a, Vector3 b, float bottomY, float topY, float thickness, int matA, int matB)
+    {
+        Vector3 dir = (b - a); dir.y = 0f; dir.Normalize();
+        Vector3 perp = Vector3.Cross(Vector3.up, dir).normalized;
+        Vector3 half = perp * (thickness * 0.5f);
+        Vector3 upB = Vector3.up * bottomY; Vector3 upT = Vector3.up * topY;
+
+        // Side A (Left face relative to direction)
+        AddQuad(verts, subTris[matA], uvs, a + half + upB, b + half + upB, b + half + upT, a + half + upT, perp);
+        // Side B (Right face relative to direction)
+        AddQuad(verts, subTris[matB], uvs, b - half + upB, a - half + upB, a - half + upT, b - half + upT, -perp);
+
+        // Caps
+        AddQuad(verts, subTris[ID_LIV], uvs, a - half + upT, b - half + upT, b + half + upT, a + half + upT, Vector3.up);
+        AddQuad(verts, subTris[ID_LIV], uvs, a - half + upB, a + half + upB, a + half + upT, a - half + upT, -dir);
+        AddQuad(verts, subTris[ID_LIV], uvs, b + half + upB, b - half + upB, b - half + upT, b + half + upT, dir);
+        if (bottomY > 0.01f) AddQuad(verts, subTris[ID_LIV], uvs, a + half + upB, a - half + upB, b - half + upB, b + half + upB, Vector3.down);
+    }
+
+    void AddInteriorWallWithDoor(List<Vector3> verts, List<List<int>> subTris, List<Vector2> uvs,
+                                 Vector3 a, Vector3 b, float h, float t, float dw, float dh, int matA, int matB)
+    {
+        Vector3 dir = (b - a); float len = dir.magnitude; dir.Normalize();
+        float mid = len * 0.5f; float half = dw * 0.5f;
+        Vector3 pL = a + dir * (mid - half); Vector3 pR = a + dir * (mid + half);
+
+        AddInteriorWall(verts, subTris, uvs, a, pL, 0f, h, t, matA, matB);
+        AddInteriorWall(verts, subTris, uvs, pR, b, 0f, h, t, matA, matB);
+        if (dh < h) AddInteriorWall(verts, subTris, uvs, pL, pR, dh, h, t, matA, matB);
+    }
+
+    // --- Helpers ---
+    int GetRoomMatIndex(string room)
+    {
+        if (string.Equals(room, "Kitchen", StringComparison.OrdinalIgnoreCase)) return ID_KIT;
+        if (string.Equals(room, "Bathroom", StringComparison.OrdinalIgnoreCase)) return ID_BAT;
+        if (string.Equals(room, "Bedroom", StringComparison.OrdinalIgnoreCase)) return ID_BED;
+        if (string.Equals(room, "Entry", StringComparison.OrdinalIgnoreCase)) return ID_ENT;
+        return ID_LIV;
+    }
+
+    void AddQuad(List<Vector3> verts, List<int> tris, List<Vector2> uvs, Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 n)
+    {
+        int start = verts.Count;
+        verts.Add(v0); verts.Add(v1); verts.Add(v2); verts.Add(v3);
+        float u = (v1 - v0).magnitude; float v = (v3 - v0).magnitude;
+        uvs.Add(Vector2.zero); uvs.Add(new Vector2(u, 0)); uvs.Add(new Vector2(u, v)); uvs.Add(new Vector2(0, v));
+
+        bool flip = Vector3.Dot(Vector3.Cross(v1 - v0, v2 - v0), n) < 0f;
+        if (!flip) { tris.Add(start); tris.Add(start + 1); tris.Add(start + 2); tris.Add(start); tris.Add(start + 2); tris.Add(start + 3); }
+        else { tris.Add(start); tris.Add(start + 2); tris.Add(start + 1); tris.Add(start); tris.Add(start + 3); tris.Add(start + 2); }
+    }
+
+    Vector3 EdgeOutwardNormal(Vector3 a, Vector3 b, Vector3 center)
+    {
+        Vector3 d = b - a; d.y = 0; d.Normalize();
+        Vector3 outw = Vector3.Cross(Vector3.up, d);
+        if (Vector3.Dot(outw, (a + b) * 0.5f - center) < 0) outw = -outw;
+        return outw;
+    }
+    Vector3 OffsetCorner(Vector3 c, Vector3 prev, Vector3 next, float t)
+    {
+        float d = Mathf.Clamp(Vector3.Dot(prev, next), -0.99f, 0.99f);
+        return c + (prev + next) * (t / (1f + d));
+    }
+
+    // Grid Helpers
+    bool SamePair(string a, string b, string c, string d) { return (a == c && b == d) || (a == d && b == c); }
+    bool ShouldWallBetween(string a, string b)
+    {
+        if (a == b) return false;
+        if (config.entryOpenToLiving && ((a == "Entry" && b == "Living") || (a == "Living" && b == "Entry"))) return false;
+        return true;
+    }
+    string LabelAt(List<RectXZ> rooms, float x, float z)
+    {
+        foreach (var r in rooms) if (r.Contains(x, z)) return r.label;
+        return "Living";
+    }
+    string GetEnclosedRoom(string a, string b)
+    {
+        if ((a == "Living" || a == "Entry") && (b != "Living" && b != "Entry")) return b;
+        if ((b == "Living" || b == "Entry") && (a != "Living" && a != "Entry")) return a;
+        return null;
+    }
+    void UniqueSort(List<float> v) { v.Sort(); int w = 0; for (int i = 0; i < v.Count; i++) if (w == 0 || Mathf.Abs(v[i] - v[w - 1]) > 1e-4f) v[w++] = v[i]; v.RemoveRange(w, v.Count - w); }
+
+    // Floor objects
+    void GenerateFloorObjects(string[,] cell, List<float> xs, List<float> zs)
+    {
+        var builders = new Dictionary<string, FloorBuild>();
+        for (int i = 0; i < cell.GetLength(0); i++)
+        {
+            for (int j = 0; j < cell.GetLength(1); j++)
+            {
+                string label = cell[i, j];
+                if (!builders.ContainsKey(label)) builders[label] = new FloorBuild();
+                Vector3 v0 = new Vector3(xs[i], 0, zs[j]); Vector3 v1 = new Vector3(xs[i + 1], 0, zs[j]);
+                Vector3 v2 = new Vector3(xs[i + 1], 0, zs[j + 1]); Vector3 v3 = new Vector3(xs[i], 0, zs[j + 1]);
+                AddQuad(builders[label].verts, builders[label].tris, builders[label].uvs, v0, v1, v2, v3, Vector3.up);
+                if (config.doubleSidedFloors) AddQuad(builders[label].verts, builders[label].tris, builders[label].uvs, v0, v1, v2, v3, Vector3.down);
+            }
+        }
+
+        Transform root = transform.Find("Floors");
+        if (root == null) { var go = new GameObject("Floors"); go.transform.SetParent(transform, false); root = go.transform; }
+
+        var needed = new HashSet<string>(builders.Keys);
+        List<GameObject> kill = new List<GameObject>();
+        for (int i = 0; i < root.childCount; i++) if (!needed.Contains(root.GetChild(i).name)) kill.Add(root.GetChild(i).gameObject);
+        foreach (var k in kill) if (Application.isPlaying) UnityEngine.Object.Destroy(k); else UnityEngine.Object.DestroyImmediate(k);
+
+        foreach (var kv in builders)
+        {
+            Transform t = root.Find(kv.Key);
+            if (t == null) { var go = new GameObject(kv.Key); go.transform.SetParent(root, false); t = go.transform; go.AddComponent<MeshFilter>(); go.AddComponent<MeshRenderer>(); }
+
+            Material m = config.livingFloorMat;
+            if (kv.Key == "Kitchen") m = config.kitchenFloorMat;
+            else if (kv.Key == "Bathroom") m = config.bathroomFloorMat;
+            else if (kv.Key == "Bedroom") m = config.bedroomFloorMat; else if (kv.Key == "Entry") m = config.entryFloorMat;
+            t.GetComponent<MeshRenderer>().sharedMaterial = m;
+
+            Mesh mesh = t.GetComponent<MeshFilter>().sharedMesh;
+            if (mesh == null) mesh = new Mesh { name = "Floor_" + kv.Key };
+            else mesh.Clear();
+            mesh.SetVertices(kv.Value.verts); mesh.SetTriangles(kv.Value.tris, 0); mesh.SetUVs(0, kv.Value.uvs);
+            mesh.RecalculateNormals(); mesh.RecalculateBounds(); t.GetComponent<MeshFilter>().sharedMesh = mesh;
+        }
+    }
+    void ClearFloorObjects() { var t = transform.Find("Floors"); if (t) if (Application.isPlaying) UnityEngine.Object.Destroy(t.gameObject); else UnityEngine.Object.DestroyImmediate(t.gameObject); }
 }
