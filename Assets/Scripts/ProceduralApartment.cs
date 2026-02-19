@@ -474,7 +474,12 @@ public class ProceduralApartment : MonoBehaviour
 
         float t = Mathf.Max(0.01f, interiorWallThickness);
 
-        // Vertical boundaries (between i-1 and i) at x = xs[i]
+        // ... inside BuildInteriorFromGrid ...
+
+        // TRACKER: Keep track of which rooms have received a door
+        HashSet<string> roomsWithDoors = new HashSet<string>();
+
+        // 1. Vertical boundaries loop
         for (int i = 1; i < nx; i++)
         {
             int j = 0;
@@ -484,42 +489,51 @@ public class ProceduralApartment : MonoBehaviour
                 string b = cell[i, j];
 
                 bool need = ShouldWallBetween(a, b);
-                if (!need)
-                {
-                    j++;
-                    continue;
-                }
+                if (!need) { j++; continue; }
 
                 int start = j;
                 int end = j;
-
-                // merge contiguous segments with same pair of labels
+                // Merge segments
                 while (end + 1 < nz)
                 {
                     string a2 = cell[i - 1, end + 1];
                     string b2 = cell[i, end + 1];
                     if (!ShouldWallBetween(a2, b2)) break;
-
-                    // keep merging even if swapped order (A/B vs B/A)
                     if (!SamePair(a, b, a2, b2)) break;
-
                     end++;
                 }
 
                 float x = xs[i];
                 float z0 = zs[start];
                 float z1 = zs[end + 1];
+                Vector3 pStart = new Vector3(x, 0f, z0);
+                Vector3 pEnd = new Vector3(x, 0f, z1);
+                float wallLen = Vector3.Distance(pStart, pEnd);
 
-                AddInteriorWall(shellVerts, shellTris, shellUvs,
-                    new Vector3(x, 0f, z0),
-                    new Vector3(x, 0f, z1),
-                    wallHeight, t);
+                // --- NEW DOOR LOGIC ---
+                string enclosedRoom = GetEnclosedRoom(a, b); // Helper needed
+                bool canFitDoor = wallLen > doorWidth + 0.2f;
+
+                // If this wall connects a Room to Living/Entry, and that room needs a door:
+                if (enclosedRoom != null && !roomsWithDoors.Contains(enclosedRoom) && canFitDoor)
+                {
+                    AddInteriorWallWithDoor(shellVerts, shellTris, shellUvs,
+                        pStart, pEnd, wallHeight, t, doorWidth, doorHeight);
+                    roomsWithDoors.Add(enclosedRoom);
+                }
+                else
+                {
+                    // Standard solid wall
+                    AddInteriorWall(shellVerts, shellTris, shellUvs,
+                        pStart, pEnd, 0f, wallHeight, t);
+                }
+                // ----------------------
 
                 j = end + 1;
             }
         }
 
-        // Horizontal boundaries (between j-1 and j) at z = zs[j]
+        // 2. Horizontal boundaries loop
         for (int j = 1; j < nz; j++)
         {
             int i = 0;
@@ -529,15 +543,10 @@ public class ProceduralApartment : MonoBehaviour
                 string b = cell[i, j];
 
                 bool need = ShouldWallBetween(a, b);
-                if (!need)
-                {
-                    i++;
-                    continue;
-                }
+                if (!need) { i++; continue; }
 
                 int start = i;
                 int end = i;
-
                 while (end + 1 < nx)
                 {
                     string a2 = cell[end + 1, j - 1];
@@ -550,11 +559,26 @@ public class ProceduralApartment : MonoBehaviour
                 float z = zs[j];
                 float x0 = xs[start];
                 float x1 = xs[end + 1];
+                Vector3 pStart = new Vector3(x0, 0f, z);
+                Vector3 pEnd = new Vector3(x1, 0f, z);
+                float wallLen = Vector3.Distance(pStart, pEnd);
 
-                AddInteriorWall(shellVerts, shellTris, shellUvs,
-                    new Vector3(x0, 0f, z),
-                    new Vector3(x1, 0f, z),
-                    wallHeight, t);
+                // --- NEW DOOR LOGIC ---
+                string enclosedRoom = GetEnclosedRoom(a, b);
+                bool canFitDoor = wallLen > doorWidth + 0.2f;
+
+                if (enclosedRoom != null && !roomsWithDoors.Contains(enclosedRoom) && canFitDoor)
+                {
+                    AddInteriorWallWithDoor(shellVerts, shellTris, shellUvs,
+                        pStart, pEnd, wallHeight, t, doorWidth, doorHeight);
+                    roomsWithDoors.Add(enclosedRoom);
+                }
+                else
+                {
+                    AddInteriorWall(shellVerts, shellTris, shellUvs,
+                        pStart, pEnd, 0f, wallHeight, t);
+                }
+                // ----------------------
 
                 i = end + 1;
             }
@@ -690,9 +714,53 @@ public class ProceduralApartment : MonoBehaviour
         return go.transform;
     }
 
-    // ------------------------- Interior Wall Prism -------------------------
+    // ------------------------- Interior Wall Prism --------------------------
+    void AddInteriorWallWithDoor(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
+                                 Vector3 a, Vector3 b, float wallHeight, float thickness,
+                                 float dWidth, float dHeight)
+    {
+        Vector3 dir = (b - a);
+        float totalLen = dir.magnitude;
+        dir.Normalize();
+
+        // 1. Check if wall is long enough for a door
+        // (If not, we just draw a header/archway or a full wall)
+        if (totalLen < dWidth + 0.2f)
+        {
+            // Just draw the header part if it fits, or full wall? 
+            // Let's just draw a standard wall to be safe/simple
+            AddInteriorWall(verts, tris, uvs, a, b, 0f, wallHeight, thickness);
+            return;
+        }
+
+        // 2. Calculate split points
+        float mid = totalLen * 0.5f;
+        float halfDoor = dWidth * 0.5f;
+
+        Vector3 pLeftJamb = a + dir * (mid - halfDoor);
+        Vector3 pRightJamb = a + dir * (mid + halfDoor);
+
+        // 3. Build the 3 parts of the door frame
+
+        // A) Left solid wall (Floor to Ceiling)
+        AddInteriorWall(verts, tris, uvs, a, pLeftJamb, 0f, wallHeight, thickness);
+
+        // B) Right solid wall (Floor to Ceiling)
+        AddInteriorWall(verts, tris, uvs, pRightJamb, b, 0f, wallHeight, thickness);
+
+        // C) Header (Door Top to Ceiling)
+        // Ensure header doesn't start below floor if door is taller than wall
+        float headerStart = Mathf.Min(dHeight, wallHeight);
+
+        if (headerStart < wallHeight - 0.01f)
+        {
+            AddInteriorWall(verts, tris, uvs, pLeftJamb, pRightJamb, headerStart, wallHeight, thickness);
+        }
+    }
+
+    // ---------------------------------------------------------
     void AddInteriorWall(List<Vector3> verts, List<int> tris, List<Vector2> uvs,
-                         Vector3 a, Vector3 b, float wallHeight, float thickness)
+                         Vector3 a, Vector3 b, float bottomY, float topY, float thickness)
     {
         Vector3 dir = (b - a);
         dir.y = 0f;
@@ -708,25 +776,36 @@ public class ProceduralApartment : MonoBehaviour
         Vector3 bPos = b + half;
         Vector3 bNeg = b - half;
 
-        Vector3 up = Vector3.up * wallHeight;
+        // Apply heights
+        Vector3 upBottom = Vector3.up * bottomY;
+        Vector3 upTop = Vector3.up * topY;
 
-        Vector3 aPosT = aPos + up;
-        Vector3 aNegT = aNeg + up;
-        Vector3 bPosT = bPos + up;
-        Vector3 bNegT = bNeg + up;
+        Vector3 aPosB = aPos + upBottom;
+        Vector3 aNegB = aNeg + upBottom;
+        Vector3 bPosB = bPos + upBottom;
+        Vector3 bNegB = bNeg + upBottom;
+
+        Vector3 aPosT = aPos + upTop;
+        Vector3 aNegT = aNeg + upTop;
+        Vector3 bPosT = bPos + upTop;
+        Vector3 bNegT = bNeg + upTop;
 
         // Long faces
-        AddQuad(verts, tris, uvs, aPos, bPos, bPosT, aPosT, perp);
-        AddQuad(verts, tris, uvs, bNeg, aNeg, aNegT, bNegT, -perp);
+        AddQuad(verts, tris, uvs, aPosB, bPosB, bPosT, aPosT, perp);
+        AddQuad(verts, tris, uvs, bNegB, aNegB, aNegT, bNegT, -perp);
 
         // Top cap
         AddQuad(verts, tris, uvs, aNegT, bNegT, bPosT, aPosT, Vector3.up);
 
         // End caps
-        AddQuad(verts, tris, uvs, aNeg, aPos, aPosT, aNegT, -dir);
-        AddQuad(verts, tris, uvs, bPos, bNeg, bNegT, bPosT, dir);
+        AddQuad(verts, tris, uvs, aNegB, aPosB, aPosT, aNegT, -dir);
+        AddQuad(verts, tris, uvs, bPosB, bNegB, bNegT, bPosT, dir);
 
-        // Bottom omitted to avoid z-fighting with floor meshes.
+        // Bottom cap (Necessary for headers above doors so you don't see through them)
+        if (bottomY > 0.01f)
+        {
+            AddQuad(verts, tris, uvs, aPosB, aNegB, bNegB, bPosB, Vector3.down);
+        }
     }
 
     // ------------------------- Outer Walls (Thick) -------------------------
@@ -897,4 +976,18 @@ public class ProceduralApartment : MonoBehaviour
             tris.Add(start + 0); tris.Add(start + 3); tris.Add(start + 2);
         }
     }
+
+    string GetEnclosedRoom(string a, string b)
+    {
+        // Define which areas are "open"
+        bool aIsOpen = (a == "Living" || a == "Entry");
+        bool bIsOpen = (b == "Living" || b == "Entry");
+
+        // If one is open and the other is a specific room, return the room name
+        if (aIsOpen && !bIsOpen) return b;
+        if (!aIsOpen && bIsOpen) return a;
+
+        return null; // Both are rooms (e.g. Kitchen touching Bath) or both are open
+    }
 }
+
