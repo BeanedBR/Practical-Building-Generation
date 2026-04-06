@@ -38,7 +38,7 @@ public class ApartmentMeshBuilder
         var verts = new List<Vector3>(8192);
         var uvs = new List<Vector2>(8192);
 
-        // We have 6 submeshes
+        // 6 submeshes:
         var subTris = new List<List<int>>(6);
         for (int i = 0; i < 6; i++) subTris.Add(new List<int>(4096));
 
@@ -131,7 +131,7 @@ public class ApartmentMeshBuilder
         float t = Mathf.Max(0.01f, config.interiorWallThickness);
         HashSet<string> roomsWithDoors = new HashSet<string>();
 
-        // 1. Vertical Boundaries (FIX APPLIED HERE)
+        // 1. Vertical Boundaries
         for (int i = 1; i < nx; i++)
         {
             int j = 0;
@@ -164,7 +164,7 @@ public class ApartmentMeshBuilder
             }
         }
 
-        // 2. Horizontal Boundaries (No change needed)
+        // 2. Horizontal Boundaries
         for (int j = 1; j < nz; j++)
         {
             int i = 0;
@@ -265,7 +265,7 @@ public class ApartmentMeshBuilder
         // Header Bottom
         AddQuad(verts, subTris[ID_EXT], uvs, oLb, oRb, iRb_h, iLb_h, Vector3.down);
 
-        // Jambs
+        // Jambs (Inside frame of the doorway)
         Vector3 jambL_o_b = oL; Vector3 jambL_o_t = oLb;
         Vector3 jambL_i_b = iL; Vector3 jambL_i_t = iLb_h;
         AddQuad(verts, subTris[ID_EXT], uvs, jambL_i_b, jambL_o_b, jambL_o_t, jambL_i_t, dir);

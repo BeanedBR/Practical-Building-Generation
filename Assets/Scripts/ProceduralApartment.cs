@@ -91,7 +91,6 @@ public class ProceduralApartment : MonoBehaviour
         var mr = GetComponent<MeshRenderer>();
 
         // Update Material Array for Submeshes
-        // Order: Ext, Liv, Kit, Bat, Bed, Ent
         Material[] mats = new Material[6];
         mats[0] = exteriorWallMat ? exteriorWallMat : livingWallMat;
         mats[1] = livingWallMat;
