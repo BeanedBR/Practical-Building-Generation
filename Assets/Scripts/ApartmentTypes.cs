@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// Shared data structures for the Procedural Apartment system
+// Shared data structures for the Procedural Apartment system:
 public struct RectXZ
 {
     public float x0, x1, z0, z1;

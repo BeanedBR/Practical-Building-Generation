@@ -16,6 +16,9 @@ public class ApartmentMeshBuilder
     private const int ID_BED = 4;
     private const int ID_ENT = 5;
 
+    // --- NEW: Tracks the bounding boxes of doors to prevent furniture blocking them ---
+    public List<Bounds> DoorBlockers { get; private set; } = new List<Bounds>();
+
     public ApartmentMeshBuilder(ProceduralApartment config, MeshFilter mf, Transform t)
     {
         this.config = config;
@@ -25,6 +28,8 @@ public class ApartmentMeshBuilder
 
     public void BuildMesh(List<RectXZ> rooms, float xMin, float xMax, float zMin, float zMax, float doorX, Mesh _mesh)
     {
+        DoorBlockers.Clear(); // Reset blockers
+
         float hx = config.width * 0.5f;
         float hz = config.length * 0.5f;
 
@@ -38,7 +43,7 @@ public class ApartmentMeshBuilder
         var verts = new List<Vector3>(8192);
         var uvs = new List<Vector2>(8192);
 
-        // 6 submeshes:
+        // We have 6 submeshes
         var subTris = new List<List<int>>(6);
         for (int i = 0; i < 6; i++) subTris.Add(new List<int>(4096));
 
@@ -53,30 +58,40 @@ public class ApartmentMeshBuilder
         Vector3 o2 = OffsetCorner(c2, n1, n2, config.outerWallThickness);
         Vector3 o3 = OffsetCorner(c3, n2, n3, config.outerWallThickness);
 
-        // 1. Draw Exterior Skin (All faces pointing out) + Tops
+        // 1. Draw Exterior Skin
         AddOuterSkin(verts, uvs, subTris, c0, c1, o0, o1, config.height, center);
         AddOuterSkin(verts, uvs, subTris, c1, c2, o1, o2, config.height, center);
 
-        // Front wall (c2->c3) needs door hole
         if (config.cutFrontDoor)
+        {
+            // --- NEW: Add Front Door Blocker ---
+            Vector3 dir = (c3 - c2).normalized;
+            float len = Vector3.Distance(c2, c3);
+            float ct = (len * 0.5f) + config.doorOffset;
+            Vector3 doorCenter = c2 + dir * ct;
+            // 2.0f depth creates a 1-meter walking clearance zone on both sides of the door
+            Vector3 size = new Vector3(config.doorWidth + 0.4f, config.height, 2.0f);
+            DoorBlockers.Add(new Bounds(doorCenter, size));
+            // -----------------------------------
+
             AddOuterSkinWithDoor(verts, uvs, subTris, c2, c3, o2, o3, config.height, center, config.doorWidth, config.doorHeight, config.doorOffset);
+        }
         else
+        {
             AddOuterSkin(verts, uvs, subTris, c2, c3, o2, o3, config.height, center);
+        }
 
         AddOuterSkin(verts, uvs, subTris, c3, c0, o3, o0, config.height, center);
 
-
-        // 2. Draw Interior Faces of Outer Walls (Segmented by room)
-        // Wall 0: c0 -> c1 (Back)
+        // 2. Draw Interior Faces of Outer Walls
         AddSegmentedInnerFace(verts, uvs, subTris, rooms, c0, c1, config.height, center);
-        // Wall 1: c1 -> c2 (Right)
         AddSegmentedInnerFace(verts, uvs, subTris, rooms, c1, c2, config.height, center);
-        // Wall 2: c2 -> c3 (Front)
+
         if (config.cutFrontDoor)
             AddSegmentedInnerFaceWithDoor(verts, uvs, subTris, rooms, c2, c3, config.height, center, config.doorWidth, config.doorHeight, config.doorOffset);
         else
             AddSegmentedInnerFace(verts, uvs, subTris, rooms, c2, c3, config.height, center);
-        // Wall 3: c3 -> c0 (Left)
+
         AddSegmentedInnerFace(verts, uvs, subTris, rooms, c3, c0, config.height, center);
 
 
@@ -88,10 +103,7 @@ public class ApartmentMeshBuilder
         _mesh.Clear();
         _mesh.SetVertices(verts);
         _mesh.subMeshCount = 6;
-        for (int i = 0; i < 6; i++)
-        {
-            _mesh.SetTriangles(subTris[i], i);
-        }
+        for (int i = 0; i < 6; i++) _mesh.SetTriangles(subTris[i], i);
         _mesh.SetUVs(0, uvs);
         _mesh.RecalculateNormals();
         _mesh.RecalculateBounds();
@@ -99,7 +111,6 @@ public class ApartmentMeshBuilder
         meshFilter.sharedMesh = _mesh;
     }
 
-    // --- Grid Logic ---
     void BuildInteriorFromGrid(List<Vector3> verts, List<List<int>> subTris, List<Vector2> uvs,
                                List<RectXZ> rooms, float xMin, float xMax, float zMin, float zMax, float wallHeight)
     {
@@ -121,24 +132,21 @@ public class ApartmentMeshBuilder
             }
         }
 
-        // Floors (Separate objects, not main mesh)
         if (config.generateRoomFloors) GenerateFloorObjects(cell, xs, zs);
         else ClearFloorObjects();
 
-        // Interior Walls
         if (!config.generateInteriorWalls) return;
 
         float t = Mathf.Max(0.01f, config.interiorWallThickness);
         HashSet<string> roomsWithDoors = new HashSet<string>();
 
-        // 1. Vertical Boundaries
+        // 1. Vertical Boundaries 
         for (int i = 1; i < nx; i++)
         {
             int j = 0;
             while (j < nz)
             {
-                string a = cell[i - 1, j]; // Left Room
-                string b = cell[i, j];     // Right Room
+                string a = cell[i - 1, j]; string b = cell[i, j];
                 if (!ShouldWallBetween(a, b)) { j++; continue; }
 
                 int end = j;
@@ -152,26 +160,19 @@ public class ApartmentMeshBuilder
                 Vector3 pStart = new Vector3(xs[i], 0f, zs[j]);
                 Vector3 pEnd = new Vector3(xs[i], 0f, zs[end + 1]);
 
-                int matA = GetRoomMatIndex(a); // Material for Room A
-                int matB = GetRoomMatIndex(b); // Material for Room B
-
-                // FIX: Swap materials for vertical walls. 
-                // Reason: Side A of a vertical wall faces East (Right), so it should use matB.
-                //         Side B of a vertical wall faces West (Left), so it should use matA.
+                int matA = GetRoomMatIndex(a); int matB = GetRoomMatIndex(b);
                 ProcessWallSegment(verts, subTris, uvs, pStart, pEnd, wallHeight, t, matB, matA, a, b, roomsWithDoors);
-
                 j = end + 1;
             }
         }
 
-        // 2. Horizontal Boundaries
+        // 2. Horizontal Boundaries 
         for (int j = 1; j < nz; j++)
         {
             int i = 0;
             while (i < nx)
             {
-                string a = cell[i, j - 1]; // Back Room
-                string b = cell[i, j];     // Front Room
+                string a = cell[i, j - 1]; string b = cell[i, j];
                 if (!ShouldWallBetween(a, b)) { i++; continue; }
 
                 int end = i;
@@ -185,10 +186,7 @@ public class ApartmentMeshBuilder
                 Vector3 pStart = new Vector3(xs[i], 0f, zs[j]);
                 Vector3 pEnd = new Vector3(xs[end + 1], 0f, zs[j]);
 
-                int matA = GetRoomMatIndex(a);
-                int matB = GetRoomMatIndex(b);
-
-                // Horizontal walls work correctly with A->A, B->B because Side A faces Back (Room A).
+                int matA = GetRoomMatIndex(a); int matB = GetRoomMatIndex(b);
                 ProcessWallSegment(verts, subTris, uvs, pStart, pEnd, wallHeight, t, matA, matB, a, b, roomsWithDoors);
                 i = end + 1;
             }
@@ -206,6 +204,21 @@ public class ApartmentMeshBuilder
         {
             AddInteriorWallWithDoor(verts, subTris, uvs, pStart, pEnd, h, t, config.doorWidth, config.doorHeight, matSideA, matSideB);
             roomsWithDoors.Add(enclosed);
+
+            // Add Interior Door Blocker
+            Vector3 dir = (pEnd - pStart).normalized;
+            Vector3 doorCenter = pStart + dir * (len * 0.5f);
+            float clearanceDepth = 2.0f; // Walking clearance through the door
+            float doorClearanceWidth = config.doorWidth + 0.4f;
+
+            // Construct bounds aligned to the wall
+            Vector3 size = new Vector3(
+                Mathf.Abs(dir.x) * doorClearanceWidth + Mathf.Abs(dir.z) * clearanceDepth,
+                h,
+                Mathf.Abs(dir.z) * doorClearanceWidth + Mathf.Abs(dir.x) * clearanceDepth
+            );
+            DoorBlockers.Add(new Bounds(doorCenter, size));
+            // --------------------------------------
         }
         else
         {
@@ -213,7 +226,7 @@ public class ApartmentMeshBuilder
         }
     }
 
-    // --- Outer Skins (Exterior Material Only) ---
+    // --- Outer Skins ---
     void AddOuterSkin(List<Vector3> verts, List<Vector2> uvs, List<List<int>> subTris,
                       Vector3 cInner1, Vector3 cInner2, Vector3 cOuter1, Vector3 cOuter2, float h, Vector3 center)
     {
@@ -225,9 +238,7 @@ public class ApartmentMeshBuilder
         Vector3 o1t = cOuter1 + Vector3.up * h; Vector3 o2t = cOuter2 + Vector3.up * h;
         Vector3 i1t = cInner1 + Vector3.up * h; Vector3 i2t = cInner2 + Vector3.up * h;
 
-        // Outer Face
         AddQuad(verts, subTris[ID_EXT], uvs, o2b, o1b, o1t, o2t, outward);
-        // Top Face
         AddQuad(verts, subTris[ID_EXT], uvs, i1t, i2t, o2t, o1t, Vector3.up);
     }
 
@@ -247,25 +258,18 @@ public class ApartmentMeshBuilder
         Vector3 oL = iL + outward * config.outerWallThickness;
         Vector3 oR = iR + outward * config.outerWallThickness;
 
-        // Left Chunk
         if (t1 > 0.01f) AddOuterSkin(verts, uvs, subTris, cInner1, iL, cOuter1, oL, h, center);
-        // Right Chunk
         if (t2 < len - 0.01f) AddOuterSkin(verts, uvs, subTris, iR, cInner2, oR, cOuter2, h, center);
 
-        // Header
         Vector3 oLb = oL + Vector3.up * dTop; Vector3 oRb = oR + Vector3.up * dTop;
         Vector3 oLt = oL + Vector3.up * h; Vector3 oRt = oR + Vector3.up * h;
         Vector3 iLt = iL + Vector3.up * h; Vector3 iRt = iR + Vector3.up * h;
         Vector3 iLb_h = iL + Vector3.up * dTop; Vector3 iRb_h = iR + Vector3.up * dTop;
 
-        // Header Outer
         AddQuad(verts, subTris[ID_EXT], uvs, oRb, oLb, oLt, oRt, outward);
-        // Header Top
         AddQuad(verts, subTris[ID_EXT], uvs, iLt, iRt, oRt, oLt, Vector3.up);
-        // Header Bottom
         AddQuad(verts, subTris[ID_EXT], uvs, oLb, oRb, iRb_h, iLb_h, Vector3.down);
 
-        // Jambs (Inside frame of the doorway)
         Vector3 jambL_o_b = oL; Vector3 jambL_o_t = oLb;
         Vector3 jambL_i_b = iL; Vector3 jambL_i_t = iLb_h;
         AddQuad(verts, subTris[ID_EXT], uvs, jambL_i_b, jambL_o_b, jambL_o_t, jambL_i_t, dir);
@@ -275,7 +279,6 @@ public class ApartmentMeshBuilder
         AddQuad(verts, subTris[ID_EXT], uvs, jambR_o_b, jambR_i_b, jambR_i_t, jambR_o_t, -dir);
     }
 
-    // --- Inner Faces of Outer Walls (Material per room) ---
     void AddSegmentedInnerFace(List<Vector3> verts, List<Vector2> uvs, List<List<int>> subTris,
         List<RectXZ> rooms, Vector3 p1, Vector3 p2, float h, Vector3 center)
     {
@@ -332,7 +335,6 @@ public class ApartmentMeshBuilder
         }
     }
 
-    // --- Interior Partition Walls (Double Sided) ---
     void AddInteriorWall(List<Vector3> verts, List<List<int>> subTris, List<Vector2> uvs,
                          Vector3 a, Vector3 b, float bottomY, float topY, float thickness, int matA, int matB)
     {
@@ -341,12 +343,9 @@ public class ApartmentMeshBuilder
         Vector3 half = perp * (thickness * 0.5f);
         Vector3 upB = Vector3.up * bottomY; Vector3 upT = Vector3.up * topY;
 
-        // Side A (Left face relative to direction)
         AddQuad(verts, subTris[matA], uvs, a + half + upB, b + half + upB, b + half + upT, a + half + upT, perp);
-        // Side B (Right face relative to direction)
         AddQuad(verts, subTris[matB], uvs, b - half + upB, a - half + upB, a - half + upT, b - half + upT, -perp);
 
-        // Caps
         AddQuad(verts, subTris[ID_LIV], uvs, a - half + upT, b - half + upT, b + half + upT, a + half + upT, Vector3.up);
         AddQuad(verts, subTris[ID_LIV], uvs, a - half + upB, a + half + upB, a + half + upT, a - half + upT, -dir);
         AddQuad(verts, subTris[ID_LIV], uvs, b + half + upB, b - half + upB, b - half + upT, b + half + upT, dir);
@@ -365,7 +364,6 @@ public class ApartmentMeshBuilder
         if (dh < h) AddInteriorWall(verts, subTris, uvs, pL, pR, dh, h, t, matA, matB);
     }
 
-    // --- Helpers ---
     int GetRoomMatIndex(string room)
     {
         if (string.Equals(room, "Kitchen", StringComparison.OrdinalIgnoreCase)) return ID_KIT;
@@ -400,7 +398,6 @@ public class ApartmentMeshBuilder
         return c + (prev + next) * (t / (1f + d));
     }
 
-    // Grid Helpers
     bool SamePair(string a, string b, string c, string d) { return (a == c && b == d) || (a == d && b == c); }
     bool ShouldWallBetween(string a, string b)
     {
@@ -421,7 +418,6 @@ public class ApartmentMeshBuilder
     }
     void UniqueSort(List<float> v) { v.Sort(); int w = 0; for (int i = 0; i < v.Count; i++) if (w == 0 || Mathf.Abs(v[i] - v[w - 1]) > 1e-4f) v[w++] = v[i]; v.RemoveRange(w, v.Count - w); }
 
-    // Floor objects
     void GenerateFloorObjects(string[,] cell, List<float> xs, List<float> zs)
     {
         var builders = new Dictionary<string, FloorBuild>();

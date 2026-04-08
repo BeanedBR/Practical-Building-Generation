@@ -6,6 +6,7 @@ using UnityEngine;
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
 public class ProceduralApartment : MonoBehaviour
 {
+    // ... [KEEP ALL YOUR PUBLIC VARIABLES EXACTLY THE SAME] ...
     [Header("Apartment Shell")]
     [Min(0.01f)] public float width = 6f;
     [Min(0.01f)] public float length = 10f;
@@ -73,13 +74,51 @@ public class ProceduralApartment : MonoBehaviour
     public Material bedroomWallMat;  // Index 4
     public Material entryWallMat;    // Index 5
 
+    [Header("Furniture Placement")]
+    public bool spawnFurniture = true;
+
+    [Space(5)]
+    public GameObject toiletPrefab;
+    public GameObject mirrorPrefab;
+
+    [Space(5)]
+    public GameObject bedPrefab;
+    public GameObject dresserPrefab;
+    public GameObject computerDeskPrefab;
+
+    [Space(5)]
+    public GameObject tvSetPrefab;
+    public GameObject sofaPrefab;
+    public GameObject tableSetPrefab;
+
+    [Space(5)]
+    public GameObject fridgePrefab;
+
     [Tooltip("Generate automatically in editor.")]
     public bool regenerateInEditor = true;
 
     private Mesh _mesh;
 
     void OnEnable() => Generate();
-    void OnValidate() { if (regenerateInEditor) Generate(); }
+
+    void OnValidate()
+    {
+        if (regenerateInEditor)
+        {
+#if UNITY_EDITOR
+            UnityEditor.EditorApplication.delayCall -= DelayGenerate;
+            UnityEditor.EditorApplication.delayCall += DelayGenerate;
+#else
+            Generate();
+#endif
+        }
+    }
+
+    private void DelayGenerate()
+    {
+        if (this == null) return;
+        Generate();
+    }
 
     public void Generate()
     {
@@ -90,7 +129,6 @@ public class ProceduralApartment : MonoBehaviour
         var mf = GetComponent<MeshFilter>();
         var mr = GetComponent<MeshRenderer>();
 
-        // Update Material Array for Submeshes
         Material[] mats = new Material[6];
         mats[0] = exteriorWallMat ? exteriorWallMat : livingWallMat;
         mats[1] = livingWallMat;
@@ -99,12 +137,9 @@ public class ProceduralApartment : MonoBehaviour
         mats[4] = bedroomWallMat ? bedroomWallMat : livingWallMat;
         mats[5] = entryWallMat ? entryWallMat : livingWallMat;
 
-        // Fill nulls with default/white if living is also null
         for (int i = 0; i < 6; i++) if (mats[i] == null) mats[i] = new Material(Shader.Find("Standard"));
-
         mr.sharedMaterials = mats;
 
-        // Generate
         ApartmentLayoutGenerator layoutGen = new ApartmentLayoutGenerator(this);
         float hx = width * 0.5f; float hz = length * 0.5f;
         float xMin = -hx, xMax = hx, zMin = -hz, zMax = hz;
@@ -117,5 +152,16 @@ public class ProceduralApartment : MonoBehaviour
         else _mesh.Clear();
 
         meshBuilder.BuildMesh(rooms, xMin, xMax, zMin, zMax, doorX, _mesh);
+
+        ApartmentFurnitureSpawner furnitureSpawner = new ApartmentFurnitureSpawner(this, transform);
+        if (spawnFurniture)
+        {
+            // Pass the door blockers to the spawner:
+            furnitureSpawner.Spawn(rooms, xMin, xMax, zMin, zMax, rng, meshBuilder.DoorBlockers);
+        }
+        else
+        {
+            furnitureSpawner.ClearFurniture();
+        }
     }
 }
