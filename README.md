@@ -54,3 +54,4 @@ Software that generates buildings, including it's interior based on a customisab
 > Meeting 11 - 24/03/2026 14:30
 - Talked about the possible implementation of Importing/Exporting using .FBX and .OBJ formats.
 - More talk on the A2 poster and discussed final dissertation improvement / deadlines.
+- Make sure all evidence on GitHub make it on the dissertation for marking.
