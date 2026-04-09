@@ -16,7 +16,7 @@ public class ApartmentMeshBuilder
     private const int ID_BED = 4;
     private const int ID_ENT = 5;
 
-    // --- NEW: Tracks the bounding boxes of doors to prevent furniture blocking them ---
+    // Tracks the bounding boxes of doors to prevent furniture blocking them
     public List<Bounds> DoorBlockers { get; private set; } = new List<Bounds>();
 
     public ApartmentMeshBuilder(ProceduralApartment config, MeshFilter mf, Transform t)
@@ -64,7 +64,7 @@ public class ApartmentMeshBuilder
 
         if (config.cutFrontDoor)
         {
-            // --- NEW: Add Front Door Blocker ---
+            // Add Front Door Blocker
             Vector3 dir = (c3 - c2).normalized;
             float len = Vector3.Distance(c2, c3);
             float ct = (len * 0.5f) + config.doorOffset;

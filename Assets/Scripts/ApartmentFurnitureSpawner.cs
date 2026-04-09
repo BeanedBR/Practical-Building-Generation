@@ -46,7 +46,7 @@ public class ApartmentFurnitureSpawner
         {
             if (room.label == "Bedroom")
             {
-                TrySpawnOnWall(config.bedPrefab, room, rng, root, rooms, xMin, xMax, zMin, zMax);
+                TrySpawnOnWall(config.bedPrefab, room, rng, root, rooms, xMin, xMax, zMin, zMax, -90f);
                 TrySpawnOnWall(config.dresserPrefab, room, rng, root, rooms, xMin, xMax, zMin, zMax);
 
                 // The computer desk model was exported sideways, applies a 90-degree twist to fix it

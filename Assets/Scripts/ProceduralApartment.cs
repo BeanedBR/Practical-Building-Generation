@@ -6,7 +6,6 @@ using UnityEngine;
 [RequireComponent(typeof(MeshFilter), typeof(MeshRenderer))]
 public class ProceduralApartment : MonoBehaviour
 {
-    // ... [KEEP ALL YOUR PUBLIC VARIABLES EXACTLY THE SAME] ...
     [Header("Apartment Shell")]
     [Min(0.01f)] public float width = 6f;
     [Min(0.01f)] public float length = 10f;
