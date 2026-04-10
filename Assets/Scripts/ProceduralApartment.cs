@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using UnityEngine;
 
 [ExecuteAlways]
@@ -121,6 +122,9 @@ public class ProceduralApartment : MonoBehaviour
 
     public void Generate()
     {
+        Stopwatch timer = new Stopwatch(); // Benchmark Test: Timing how long generation takes in milliseconds.
+        timer.Start();
+
         if (Application.isPlaying && randomizeSeedOnPlay)
             seed = UnityEngine.Random.Range(int.MinValue, int.MaxValue);
 
@@ -162,5 +166,9 @@ public class ProceduralApartment : MonoBehaviour
         {
             furnitureSpawner.ClearFurniture();
         }
+
+        // Stop timer and print in output console:
+        timer.Stop();
+        UnityEngine.Debug.Log($"Generation took: {timer.ElapsedMilliseconds} ms");
     }
 }
