@@ -2,16 +2,16 @@
 Software that generates buildings, including it's interior based on a customisable tab that the user can provide fixed options for an expected result
 
 # Licenses:
-https://free3d.com/3d-model/sofa-801691.html, submitted by berkayc.
-https://free3d.com/3d-model/masa-ve-sandalye-222808.html, submitted by emerecskn.
-https://free3d.com/3d-model/modern-desk-34387.html, submitted by mmnkl9.
-https://free3d.com/3d-model/tv-stand-305987.html, submitted by kiarmars.
-https://free3d.com/3d-model/dresser-old-65315.html, submitted by theernestobecerra.
-https://free3d.com/3d-model/bed-93470.html, submitted by kwayzie.
-https://free3d.com/3d-model/simple-lamp-81996.html, submitted by umisakurai.
-https://free3d.com/3d-model/sun-mirror-35654.html, submitted by hardheart92.
-https://free3d.com/3d-model/toilet-26557.html, submitted by trippsmith05.
-https://free3d.com/3d-model/mi-smart-tv-32-inch-239229.html, submitted by vinitK.
+- https://free3d.com/3d-model/sofa-801691.html, submitted by berkayc.
+- https://free3d.com/3d-model/masa-ve-sandalye-222808.html, submitted by emerecskn.
+- https://free3d.com/3d-model/modern-desk-34387.html, submitted by mmnkl9.
+- https://free3d.com/3d-model/tv-stand-305987.html, submitted by kiarmars.
+- https://free3d.com/3d-model/dresser-old-65315.html, submitted by theernestobecerra.
+- https://free3d.com/3d-model/bed-93470.html, submitted by kwayzie.
+- https://free3d.com/3d-model/simple-lamp-81996.html, submitted by umisakurai.
+- https://free3d.com/3d-model/sun-mirror-35654.html, submitted by hardheart92.
+- https://free3d.com/3d-model/toilet-26557.html, submitted by trippsmith05.
+- https://free3d.com/3d-model/mi-smart-tv-32-inch-239229.html, submitted by vinitK.
 
 
 # Meeting Logs
